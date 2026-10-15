@@ -1,0 +1,160 @@
+import { describe, expect, test } from "bun:test";
+
+import {
+  MAX_SNAPSHOT_BYTES,
+  parseOpenSignals,
+  parseSnapshot,
+  parseTriageProposal,
+  type FlywheelOpenSignalsV1,
+  type FlywheelSnapshotV1,
+} from "../src/protocol";
+import { loadOpenSignals, loadSnapshot } from "../src/snapshot-client";
+
+const validSnapshot: FlywheelSnapshotV1 = {
+  schema_version: 1 as const,
+  generated_at: "2026-10-14T12:34:56.789Z",
+  counts: {
+    sessions: 4,
+    signals_open: 3,
+    cases_candidate: 2,
+    cases_active: 1,
+    eval_runs: 5,
+  },
+  latest_eval: {
+    case_id: "case-1",
+    result: "fixed",
+    created_at: "2026-10-14T12:00:00Z",
+  },
+  latest_draft: {
+    case_id: "case-1",
+    status: "fixed",
+    created_at: "2026-10-14T11:00:00Z",
+    completed_at: "2026-10-14T11:30:00Z",
+    retry_count: 0,
+  },
+  recent_cases: [
+    {
+      id: "case-1",
+      component: "dashboard",
+      severity: "high",
+      status: "active",
+      created_at: "2026-10-14T10:00:00Z",
+    },
+  ],
+};
+
+const validJson = JSON.stringify(validSnapshot);
+
+const validOpenSignals: FlywheelOpenSignalsV1 = {
+  schema_version: 1,
+  signals: [{
+    id: 7,
+    kind: "corrected",
+    component: "dashboard",
+    reason: "Show a way to review open corrections.",
+    assistant_text: "The dashboard only shows correction text.",
+    created_at: "2026-10-14T12:00:00Z",
+  }],
+};
+
+const validOpenSignalsJson = JSON.stringify(validOpenSignals);
+
+describe("parseSnapshot", () => {
+  test("accepts exact safe v1 projection", () => {
+    expect(parseSnapshot(`${validJson}\n`)).toEqual(validSnapshot);
+  });
+
+  test("rejects missing or unknown fields", () => {
+    expect(() => parseSnapshot(JSON.stringify({ ...validSnapshot, generated_at: undefined }))).toThrow();
+    expect(() => parseSnapshot(JSON.stringify({ ...validSnapshot, worktree_path: "/tmp/worktree" }))).toThrow();
+  });
+
+  test("rejects sensitive raw fields at every projection level", () => {
+    expect(() => parseSnapshot(JSON.stringify({ ...validSnapshot, transcript_path: "/secret" }))).toThrow();
+    expect(() =>
+      parseSnapshot(
+        JSON.stringify({
+          ...validSnapshot,
+          recent_cases: [{ ...validSnapshot.recent_cases[0], diagnosis: "raw diagnosis" }],
+        }),
+      ),
+    ).toThrow();
+  });
+
+  test("rejects invalid schema, statuses, timestamps, and counts", () => {
+    expect(() => parseSnapshot(JSON.stringify({ ...validSnapshot, schema_version: 2 }))).toThrow();
+    expect(() =>
+      parseSnapshot(
+        JSON.stringify({ ...validSnapshot, recent_cases: [{ ...validSnapshot.recent_cases[0], status: "deleted" }] }),
+      ),
+    ).toThrow();
+    expect(() => parseSnapshot(JSON.stringify({ ...validSnapshot, generated_at: "2026-02-30T12:00:00Z" }))).toThrow();
+    expect(() =>
+      parseSnapshot(
+        JSON.stringify({ ...validSnapshot, counts: { ...validSnapshot.counts, sessions: -1 } }),
+      ),
+    ).toThrow();
+    expect(() => parseSnapshot(validJson.replace('"sessions":4', '"sessions":1e999'))).toThrow();
+  });
+
+  test("rejects multiple lines and oversized output", () => {
+    expect(() => parseSnapshot(`${validJson}\n${validJson}`)).toThrow();
+    expect(() => parseSnapshot(`${validJson}${" ".repeat(MAX_SNAPSHOT_BYTES)}`)).toThrow();
+  });
+});
+
+describe("parseOpenSignals", () => {
+  test("accepts the local review projection and rejects fields outside it", () => {
+    expect(parseOpenSignals(`${validOpenSignalsJson}\n`)).toEqual(validOpenSignals);
+    expect(() =>
+      parseOpenSignals(JSON.stringify({
+        ...validOpenSignals,
+        signals: [{ ...validOpenSignals.signals[0], payload_json: '{"raw":"transcript"}' }],
+      })),
+    ).toThrow();
+    expect(() =>
+      parseOpenSignals(JSON.stringify({
+        ...validOpenSignals,
+        signals: [{ ...validOpenSignals.signals[0], id: -1 }],
+      })),
+    ).toThrow();
+  });
+});
+
+describe("parseTriageProposal", () => {
+  const proposal = {
+    schema_version: 1,
+    signal_id: 7,
+    fingerprint: "missing-correction-context",
+    severity: "medium",
+    diagnosis: "Include correction context so users can understand what needs review.",
+  };
+
+  test("rejects a proposal for a different correction", () => {
+    expect(() => parseTriageProposal(JSON.stringify(proposal), 8)).toThrow();
+  });
+
+  test("refuses incomplete or unsupported model analysis", () => {
+    expect(() => parseTriageProposal(JSON.stringify({ ...proposal, diagnosis: " " }), 7)).toThrow();
+    expect(() => parseTriageProposal(JSON.stringify({ ...proposal, fingerprint: null }), 7)).toThrow();
+    expect(() => parseTriageProposal(JSON.stringify({ ...proposal, severity: "critical" }), 7)).toThrow();
+  });
+});
+
+describe("loadSnapshot", () => {
+
+  test("returns unavailable for nonzero process, malformed output, timeout, and oversized output", async () => {
+    expect(
+      await loadSnapshot(async () => ({ code: 1, stdout: validJson, stderr: "failure" }), "/repo"),
+    ).toEqual({ kind: "unavailable" });
+    expect(
+      await loadSnapshot(async () => ({ code: 0, stdout: "not json", stderr: "" }), "/repo"),
+    ).toEqual({ kind: "unavailable" });
+    expect(
+      await loadSnapshot(async () => Promise.reject(new Error("timeout")), "/repo"),
+    ).toEqual({ kind: "unavailable" });
+    expect(
+      await loadSnapshot(async () => ({ code: 0, stdout: "x".repeat(MAX_SNAPSHOT_BYTES + 1), stderr: "" }), "/repo"),
+    ).toEqual({ kind: "unavailable" });
+  });
+});
