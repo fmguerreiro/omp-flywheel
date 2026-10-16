@@ -1,7 +1,7 @@
 import { startDraftProgress } from "./draft-progress";
 import { dashboardLines, widgetLines } from "./present";
 import { loadCandidates, loadOpenSignals, loadSnapshot, type SnapshotRun } from "./snapshot-client";
-import { parseTriageProposal, type FlywheelCandidate, type FlywheelOpenSignal } from "./protocol";
+import { parseTriagePromotion, parseTriageProposal, type FlywheelCandidate, type FlywheelOpenSignal } from "./protocol";
 import {
   initialViewState,
   loadingViewState,
@@ -393,7 +393,7 @@ export default function flywheelDashboard(pi: DashboardExtensionApi): void {
     }
     return [
       ...wrap(`${switchView}${signals?.length ? "j/k Select correction · p Analyze · x Reject · " : ""}r Refresh · Esc Close`),
-      ...wrap(signals?.length ? "Analyze a correction to generate an improvement suggestion. You review it before saving." : "No open corrections. Nothing to analyze."),
+      ...wrap(signals?.length ? "Analyze a correction, then authorize drafting, evaluation, and automatic publication if checks pass." : "No open corrections. Nothing to analyze."),
     ];
   }
 
@@ -409,7 +409,16 @@ export default function flywheelDashboard(pi: DashboardExtensionApi): void {
     await refresh(ctx);
   }
 
+  function draftRunning(): boolean {
+    return busy || candidates?.some((candidate) => candidate.latest_draft?.status === "running") === true
+      || (state.kind === "ready" && state.snapshot.latest_draft?.status === "running");
+  }
+
   async function promoteSignal(ctx: DashboardContext, signal: FlywheelOpenSignal): Promise<void> {
+    if (draftRunning()) {
+      ctx.ui.notify("A Flywheel draft is already running.", "warning");
+      return;
+    }
     busy = true;
     setWidget(ctx, [`Flywheel · Analyzing correction #${signal.id}…`]);
     try {
@@ -426,20 +435,21 @@ export default function flywheelDashboard(pi: DashboardExtensionApi): void {
       const proposal = parseTriageProposal(analysis.stdout, signal.id);
       if (!await ctx.ui.confirm(
         "Review suggested improvement",
-        `Your correction: ${signal.reason ?? signal.kind}\n\nSuggested behavior change:\n${proposal.diagnosis}\n\nSeverity: ${proposal.severity}\n\nSave this as a candidate? No files will change yet.`,
+        `Your correction: ${signal.reason ?? signal.kind}\n\nSuggested behavior change:\n${proposal.diagnosis}\n\nSeverity: ${proposal.severity}\n\nFlywheel will choose the instruction file, write a change in an isolated checkout, and run evaluation checks.\n\nIf checks pass, it automatically commits and pushes to origin/main. There is no second approval.\n\nStart drafting?`,
       )) return;
       const result = await pi.exec(
         process.env.AGENT_FLYWHEEL_CLI ?? "agent-flywheel",
-        ["triage-promote", String(signal.id), "--fingerprint", proposal.fingerprint, "--severity", proposal.severity, "--diagnosis", proposal.diagnosis],
+        ["triage-promote", String(signal.id), "--json", "--fingerprint", proposal.fingerprint, "--severity", proposal.severity, "--diagnosis", proposal.diagnosis],
         { cwd: ctx.cwd, timeout: 5_000 },
       );
-      ctx.ui.notify(
-        result.code === 0 ? result.stdout.trim() || `Saved candidate for correction #${signal.id}.` : result.stderr.trim() || `Could not save candidate for correction #${signal.id}.`,
-        result.code === 0 ? "info" : "error",
-      );
-      await refresh(ctx);
+      if (result.code !== 0) {
+        throw new Error(result.stderr.trim() || `Could not save candidate for correction #${signal.id}.`);
+      }
+      const caseId = parseTriagePromotion(result.stdout, signal.id);
+      await executeDraft(ctx, caseId);
     } catch (error) {
       ctx.ui.notify(error instanceof Error ? error.message : "Could not analyze this correction.", "error");
+      await refresh(ctx);
     } finally {
       busy = false;
       updateWidget(ctx);
@@ -447,21 +457,33 @@ export default function flywheelDashboard(pi: DashboardExtensionApi): void {
   }
 
   async function draftCandidate(ctx: DashboardContext, candidate: FlywheelCandidate): Promise<void> {
-    if (!await ctx.ui.confirm(
-      "Draft selected improvement?",
-      `${candidate.diagnosis ?? "No description captured."}\n\nFlywheel will choose the instruction file, write a change in an isolated checkout, and run evaluation checks.\n\nIf checks pass, it automatically commits and pushes to origin/main. There is no second approval.\n\nStart drafting?`,
-    )) return;
-
+    if (draftRunning()) {
+      ctx.ui.notify("A Flywheel draft is already running.", "warning");
+      return;
+    }
     busy = true;
+    try {
+      if (!await ctx.ui.confirm(
+        "Draft selected improvement?",
+        `${candidate.diagnosis ?? "No description captured."}\n\nFlywheel will choose the instruction file, write a change in an isolated checkout, and run evaluation checks.\n\nIf checks pass, it automatically commits and pushes to origin/main. There is no second approval.\n\nStart drafting?`,
+      )) return;
+      await executeDraft(ctx, candidate.id);
+    } finally {
+      busy = false;
+      updateWidget(ctx);
+    }
+  }
+
+  async function executeDraft(ctx: DashboardContext, caseId: string): Promise<void> {
     let progress: Awaited<ReturnType<typeof startDraftProgress>> | undefined;
     try {
       progress = await startDraftProgress((lines) => setWidget(ctx, lines));
       const result = await pi.exec(
         process.env.AGENT_FLYWHEEL_CLI ?? "agent-flywheel",
-        ["draft", "--case", candidate.id, "--repo", ctx.cwd, "--progress-file", progress.path],
+        ["draft", "--case", caseId, "--repo", ctx.cwd, "--progress-file", progress.path],
         { cwd: ctx.cwd, timeout: 900_000 },
       );
-      ctx.ui.notify(result.code === 0 ? result.stdout.trim() || "Draft attempt finished." : result.stderr.trim() || "Draft failed.", result.code === 0 ? "info" : "error");
+      ctx.ui.notify(result.code === 0 ? result.stdout.trim() || "Draft attempt finished." : result.stderr.trim() || result.stdout.trim() || "Draft failed.", result.code === 0 ? "info" : "error");
     } catch (error) {
       ctx.ui.notify(error instanceof Error ? error.message : "Could not draft improvement.", "error");
     } finally {
@@ -470,8 +492,13 @@ export default function flywheelDashboard(pi: DashboardExtensionApi): void {
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : "Could not remove draft progress files.", "warning");
       } finally {
-        busy = false;
         await refresh(ctx);
+        const drafted = candidates?.findIndex((candidate) => candidate.id === caseId) ?? -1;
+        if (drafted >= 0) {
+          selectedCandidate = drafted;
+          view = "candidates";
+          updateWidget(ctx);
+        }
       }
     }
   }
@@ -551,17 +578,17 @@ export default function flywheelDashboard(pi: DashboardExtensionApi): void {
         if (action === undefined) return;
         const signal = signals?.[selectedSignal];
         const candidate = candidates?.[selectedCandidate];
-        if (action === "draft" && candidate) {
+        if ((action === "draft" && candidate) || (action === "promote" && signal)) {
           dashboardOpen = false;
           updateWidget(ctx);
           try {
-            await draftCandidate(ctx, candidate);
+            if (action === "draft" && candidate) await draftCandidate(ctx, candidate);
+            else if (signal) await promoteSignal(ctx, signal);
           } finally {
             dashboardOpen = true;
             updateWidget(ctx);
           }
         } else if (signal && action === "reject") await rejectSignal(ctx, signal);
-        else if (signal && action === "promote") await promoteSignal(ctx, signal);
       }
     } finally {
       dashboardOpen = false;

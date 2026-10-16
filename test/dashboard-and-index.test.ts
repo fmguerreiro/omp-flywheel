@@ -30,6 +30,14 @@ const openSignals = JSON.stringify({
   }],
 });
 
+const triageProposal = {
+  schema_version: 1,
+  signal_id: 7,
+  fingerprint: "missing-correction-context",
+  severity: "medium",
+  diagnosis: "Show the proposed behavior change before asking users to draft.",
+};
+
 const candidateCases = [
   {
     id: "case-review-context",
@@ -50,7 +58,7 @@ const candidateCases = [
 ];
 
 type CandidateFixture = Omit<(typeof candidateCases)[number], "latest_draft"> & {
-  latest_draft: { status: "running"; error: string | null } | null;
+  latest_draft: { status: "running" | "failed" | "blocked"; error: string | null } | null;
 };
 
 function candidatesJson(candidates: readonly CandidateFixture[] = candidateCases): string {
@@ -83,9 +91,12 @@ function candidateDashboard(options: {
   candidates?: readonly CandidateFixture[];
   corrections?: boolean;
   authorizeDraft?: boolean;
+  analyze?: (args: string[], options: { cwd: string; timeout: number }) => Promise<ExecResult>;
+  promote?: (args: string[], options: { cwd: string; timeout: number }) => Promise<ExecResult>;
   draft?: (args: string[], options: { cwd: string; timeout: number }) => Promise<ExecResult>;
 } = {}) {
   let candidates = options.candidates ?? candidateCases;
+  let corrections = options.corrections ?? false;
   let sessionStart: SessionStartHandler | undefined;
   let command: CommandHandler | undefined;
   let component: DashboardComponent | undefined;
@@ -115,7 +126,7 @@ function candidateDashboard(options: {
             ...previous,
             counts: {
               ...previous.counts,
-              signals_open: options.corrections ? 1 : 0,
+              signals_open: corrections ? 1 : 0,
               cases_candidate: candidates.length,
             },
           }),
@@ -127,6 +138,10 @@ function candidateDashboard(options: {
         return { code: 0, stdout: candidatesJson(candidates), stderr: "" };
       }
       if (args.includes("signals")) return { code: 0, stdout: openSignals, stderr: "" };
+      if (args.includes("triage-propose")) {
+        return options.analyze?.(args, execOptions) ?? { code: 0, stdout: JSON.stringify(triageProposal), stderr: "" };
+      }
+      if (args.includes("triage-promote") && options.promote) return options.promote(args, execOptions);
       if (args.includes("draft") && options.draft) return options.draft(args, execOptions);
       if (args.includes("draft") || args.includes("triage-reject")) {
         return { code: 0, stdout: "", stderr: "" };
@@ -145,6 +160,7 @@ function candidateDashboard(options: {
   const context: DashboardContext = {
     cwd: "/tmp/repository",
     mode: "tui",
+    model: { provider: "anthropic", id: "claude-sonnet-4-5" },
     ui: {
       confirm: async (title, message) => {
         expect(overlayActive).toBe(false);
@@ -218,6 +234,9 @@ function candidateDashboard(options: {
     setCandidates(next: readonly CandidateFixture[]) {
       candidates = next;
     },
+    setCorrections(next: boolean) {
+      corrections = next;
+    },
     async start() {
       if (!sessionStart || !command) throw new Error("extension registrations missing");
       sessionStart({}, context);
@@ -228,6 +247,14 @@ function candidateDashboard(options: {
     press(key: string) {
       if (!component || !overlayActive) throw new Error("dashboard overlay is not active");
       component.handleInput(key);
+    },
+    render(): readonly string[] {
+      if (!component || !overlayActive) throw new Error("dashboard overlay is not active");
+      return component.render(80);
+    },
+    async openAgain() {
+      if (!command) throw new Error("command missing");
+      await command("", context);
     },
     async close() {
       this.press("\u001b");
@@ -408,6 +435,125 @@ describe("flywheel dashboard extension", () => {
     expect(dashboard.requests.some((args) => args.some((arg) => arg.startsWith("triage-")))).toBe(false);
   });
 
+  test.each(["p", "\u001b[112;1u"])("one correction authorization immediately drafts its exact promoted case (%s)", async (key) => {
+    const started = Promise.withResolvers<string>();
+    const completed = Promise.withResolvers<ExecResult>();
+    const promoted = { ...candidateCases[0]!, id: "case-created-from-correction" };
+    const dashboard = candidateDashboard({
+      corrections: true,
+      authorizeDraft: true,
+      promote: async () => {
+        expect(dashboard.confirmations).toHaveLength(1);
+        expect(dashboard.requests.some((request) => request.includes("draft"))).toBe(false);
+        dashboard.setCandidates([candidateCases[1]!, candidateCases[0]!, promoted]);
+        dashboard.setCorrections(false);
+        return { code: 0, stdout: JSON.stringify({ schema_version: 1, signal_id: 7, case_id: promoted.id }), stderr: "" };
+      },
+      draft: async (args, execOptions) => {
+        expect(execOptions).toEqual({ cwd: "/tmp/repository", timeout: 900_000 });
+        started.resolve(args[args.indexOf("--progress-file") + 1]!);
+        return completed.promise;
+      },
+    });
+    await dashboard.start();
+    dashboard.press(key);
+    const path = await started.promise;
+    try {
+      expect(dashboard.confirmations).toHaveLength(1);
+      expect(dashboard.widgets.at(-1)?.placement).toBe("belowEditor");
+      expect(dashboard.widgets.at(-1)?.content?.join(" ")).toContain("elapsed");
+      expect(dashboard.requests.filter((args) => args.includes("snapshot"))).toHaveLength(1);
+      await dashboard.openAgain();
+      expect(dashboard.requests.filter((args) => args.includes("draft"))).toEqual([
+        ["draft", "--case", promoted.id, "--repo", "/tmp/repository", "--progress-file", path],
+      ]);
+    } finally {
+      completed.resolve({ code: 0, stdout: "Published evaluated change.", stderr: "" });
+      await dashboard.waitForOverlay(2);
+      await dashboard.close();
+    }
+    expect(dashboard.confirmations).toHaveLength(1);
+    expect(dashboard.notices.at(-1)).toEqual({ message: "Published evaluated change.", type: "info" });
+    expect(await stat(dirname(path)).then(() => true, () => false)).toBe(false);
+  });
+
+  test("declining correction review leaves it open without promotion or draft", async () => {
+    const dashboard = candidateDashboard({ corrections: true });
+    await dashboard.start();
+    dashboard.press("p");
+    await dashboard.waitForOverlay(2);
+    expect(dashboard.render().join("\n")).toContain("Correction 1/1 · #7");
+    await dashboard.close();
+
+    expect(dashboard.confirmations).toHaveLength(1);
+    expect(dashboard.requests.filter((args) => args.includes("triage-propose"))).toHaveLength(1);
+    expect(dashboard.requests.some((args) => args.includes("triage-promote") || args.includes("draft"))).toBe(false);
+  });
+
+  test.each(["analysis", "promotion", "invalid promotion"] as const)("%s failure never drafts another saved case", async (failure) => {
+    const dashboard = candidateDashboard({
+      corrections: true,
+      authorizeDraft: true,
+      analyze: async () => failure === "analysis"
+        ? { code: 1, stdout: "", stderr: "Model analysis failed." }
+        : { code: 0, stdout: JSON.stringify(triageProposal), stderr: "" },
+      promote: async () => failure === "promotion"
+        ? { code: 2, stdout: "", stderr: "Fingerprint already has a case." }
+        : { code: 0, stdout: JSON.stringify({ schema_version: 1, signal_id: 8, case_id: candidateCases[0]!.id }), stderr: "" },
+    });
+    await dashboard.start();
+    dashboard.press("p");
+    await dashboard.waitForOverlay(2);
+    expect(dashboard.render().join("\n")).toContain("Correction 1/1 · #7");
+    await dashboard.close();
+
+    expect(dashboard.confirmations).toHaveLength(failure === "analysis" ? 0 : 1);
+    expect(dashboard.requests.filter((args) => args.includes("triage-promote"))).toHaveLength(failure === "analysis" ? 0 : 1);
+    expect(dashboard.requests.some((args) => args.includes("draft"))).toBe(false);
+    expect(dashboard.notices.at(-1)).toEqual({
+      type: "error",
+      message: failure === "analysis" ? "Model analysis failed."
+        : failure === "promotion" ? "Fingerprint already has a case."
+          : "Invalid Flywheel snapshot: promotion does not match the selected correction",
+    });
+  });
+
+  test("failed correction draft stays selected for a separately authorized retry", async () => {
+    const promoted = { ...candidateCases[0]!, id: "case-retry-correction" };
+    const dashboard = candidateDashboard({
+      corrections: true,
+      authorizeDraft: true,
+      promote: async () => {
+        dashboard.setCorrections(false);
+        dashboard.setCandidates([candidateCases[1]!, promoted, candidateCases[0]!]);
+        return { code: 0, stdout: JSON.stringify({ schema_version: 1, signal_id: 7, case_id: promoted.id }), stderr: "" };
+      },
+      draft: async () => {
+        dashboard.setCandidates([
+          candidateCases[0]!, candidateCases[1]!,
+          { ...promoted, latest_draft: { status: "failed", error: "Verifier rejected the change." } },
+        ]);
+        return { code: 1, stdout: "", stderr: "Verifier rejected the change." };
+      },
+    });
+    await dashboard.start();
+    dashboard.press("p");
+    await dashboard.waitForOverlay(2);
+    expect(dashboard.confirmations).toHaveLength(1);
+    expect(dashboard.notices.at(-1)).toEqual({ message: "Verifier rejected the change.", type: "error" });
+    expect(dashboard.render().join("\n")).toContain("Candidate 3/3");
+    expect(dashboard.render().join("\n")).toContain("Verifier rejected the change.");
+    dashboard.press("\u001b[100;1u");
+    await dashboard.waitForOverlay(3);
+    await dashboard.close();
+
+    expect(dashboard.confirmations).toHaveLength(2);
+    expect(dashboard.requests.filter((args) => args.includes("triage-promote"))).toHaveLength(1);
+    expect(dashboard.requests.filter((args) => args.includes("draft")).map((args) => args[args.indexOf("--case") + 1])).toEqual([
+      promoted.id, promoted.id,
+    ]);
+  });
+
   test("ignores correction actions when only candidates exist", async () => {
     const dashboard = candidateDashboard();
     await dashboard.start();
@@ -435,6 +581,25 @@ describe("flywheel dashboard extension", () => {
 
     expect(dashboard.confirmations).toHaveLength(0);
     expect(dashboard.requests.some((args) => args.includes("draft"))).toBe(false);
+  });
+
+  test.each([true, false])("does not start correction or candidate drafting while another case runs (%s)", async (corrections) => {
+    const dashboard = candidateDashboard({
+      corrections,
+      authorizeDraft: true,
+      candidates: [
+        candidateCases[0]!,
+        { ...candidateCases[1]!, latest_draft: { status: "running", error: null } },
+      ],
+    });
+    await dashboard.start();
+    dashboard.press(corrections ? "p" : "d");
+    await dashboard.waitForOverlay(2);
+    await dashboard.close();
+
+    expect(dashboard.confirmations).toHaveLength(0);
+    expect(dashboard.requests.some((args) => args.includes("triage-propose") || args.includes("triage-promote") || args.includes("draft"))).toBe(false);
+    expect(dashboard.notices.at(-1)?.type).toBe("warning");
   });
 
   test("starts with corrections and switches both ways without applying correction actions to candidates", async () => {

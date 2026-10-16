@@ -292,6 +292,17 @@ export function parseTriageProposal(text: string, signalId: number) {
   };
 }
 
+export function parseTriagePromotion(text: string, signalId: number): string {
+  const source = record(parseOneLine(text), "triage promotion");
+  exactKeys(source, "triage promotion", ["schema_version", "signal_id", "case_id"]);
+  if (source.schema_version !== 1 || source.signal_id !== signalId) {
+    invalid("promotion does not match the selected correction");
+  }
+  const caseId = string(source.case_id, "case_id");
+  if (!caseId.trim() || caseId !== caseId.trim()) invalid("promotion must include a case ID");
+  return caseId;
+}
+
 export function parseCandidates(text: string): FlywheelCandidatesV1 {
   const source = record(parseOneLine(text), "candidates");
   exactKeys(source, "candidates", ["schema_version", "candidates"]);

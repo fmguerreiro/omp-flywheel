@@ -4,6 +4,7 @@ import {
   MAX_SNAPSHOT_BYTES,
   parseOpenSignals,
   parseSnapshot,
+  parseTriagePromotion,
   parseTriageProposal,
   type FlywheelOpenSignalsV1,
   type FlywheelSnapshotV1,
@@ -138,6 +139,31 @@ describe("parseTriageProposal", () => {
     expect(() => parseTriageProposal(JSON.stringify({ ...proposal, diagnosis: " " }), 7)).toThrow();
     expect(() => parseTriageProposal(JSON.stringify({ ...proposal, fingerprint: null }), 7)).toThrow();
     expect(() => parseTriageProposal(JSON.stringify({ ...proposal, severity: "critical" }), 7)).toThrow();
+  });
+});
+
+describe("parseTriagePromotion", () => {
+  const promotion = { schema_version: 1, signal_id: 7, case_id: "case-new-correction" };
+
+  test("returns the exact created case ID from the selected correction's promotion", () => {
+    expect(parseTriagePromotion(`${JSON.stringify(promotion)}\n`, 7)).toBe("case-new-correction");
+  });
+
+  test("rejects missing IDs, different corrections, and unsupported responses", () => {
+    for (const value of [
+      { ...promotion, schema_version: 2 },
+      { ...promotion, signal_id: 8 },
+      { schema_version: 1, signal_id: 7 },
+      { ...promotion, case_id: null },
+      { ...promotion, case_id: "" },
+      { ...promotion, case_id: " " },
+      { ...promotion, case_id: " case-new-correction " },
+      { ...promotion, diagnosis: "not part of the promotion contract" },
+    ]) {
+      expect(() => parseTriagePromotion(JSON.stringify(value), 7)).toThrow();
+    }
+    expect(() => parseTriagePromotion("promoted signal 7 to case case-new-correction\n", 7)).toThrow();
+    expect(() => parseTriagePromotion(`${JSON.stringify(promotion)}\n${JSON.stringify(promotion)}`, 7)).toThrow();
   });
 });
 
