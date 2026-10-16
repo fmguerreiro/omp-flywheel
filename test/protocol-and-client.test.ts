@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  MAX_DETAILS_BYTES,
+  parseCandidates,
   MAX_SNAPSHOT_BYTES,
   parseOpenSignals,
   parseSnapshot,
@@ -9,7 +11,7 @@ import {
   type FlywheelOpenSignalsV1,
   type FlywheelSnapshotV1,
 } from "../src/protocol";
-import { loadOpenSignals, loadSnapshot } from "../src/snapshot-client";
+import { loadCandidates, loadOpenSignals, loadSnapshot } from "../src/snapshot-client";
 
 const validSnapshot: FlywheelSnapshotV1 = {
   schema_version: 1 as const,
@@ -182,5 +184,52 @@ describe("loadSnapshot", () => {
     expect(
       await loadSnapshot(async () => ({ code: 0, stdout: "x".repeat(MAX_SNAPSHOT_BYTES + 1), stderr: "" }), "/repo"),
     ).toEqual({ kind: "unavailable" });
+  });
+});
+
+describe("Unicode detail pages", () => {
+  function asciiJson(value: unknown): string {
+    return JSON.stringify(value).replace(/[\u007f-\uffff]/g, (character) =>
+      `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  }
+
+  test("loads a full candidate page with escaped Unicode diagnoses and errors", async () => {
+    const candidates = Array.from({ length: 20 }, (_, index) => ({
+      id: `case-${index}`,
+      component: "verification",
+      severity: "medium",
+      diagnosis: "🧪".repeat(2_000),
+      created_at: "2026-10-14T12:00:00Z",
+      latest_draft: { status: "failed" as const, error: "🧪".repeat(500) },
+    }));
+    const loaded = await loadCandidates(async () => ({
+      code: 0, stdout: asciiJson({ schema_version: 1, candidates }), stderr: "",
+    }), "/repo");
+    expect(loaded).toEqual({ kind: "ready", candidates: { schema_version: 1, candidates } });
+  });
+
+  test("loads a full correction page with escaped Unicode evidence", async () => {
+    const signals = Array.from({ length: 20 }, (_, index) => ({
+      ...validOpenSignals.signals[0]!,
+      id: index + 1,
+      reason: "🧪".repeat(300),
+      assistant_text: "🧪".repeat(1_500),
+    }));
+    const loaded = await loadOpenSignals(async () => ({
+      code: 0, stdout: asciiJson({ schema_version: 1, signals }), stderr: "",
+    }), "/repo");
+    expect(loaded).toEqual({ kind: "ready", signals: { schema_version: 1, signals } });
+  });
+
+  test("rejects detail pages beyond the encoded-byte limit", async () => {
+    const padding = " ".repeat(MAX_DETAILS_BYTES);
+    const candidates = `${JSON.stringify({ schema_version: 1, candidates: [] })}${padding}`;
+    const signals = `${validOpenSignalsJson}${padding}`;
+    expect(() => parseCandidates(candidates)).toThrow("output exceeds size limit");
+    expect(() => parseOpenSignals(signals)).toThrow("output exceeds size limit");
+    expect(await loadCandidates(async () => ({ code: 0, stdout: candidates, stderr: "" }), "/repo"))
+      .toEqual({ kind: "unavailable" });
+    expect(await loadOpenSignals(async () => ({ code: 0, stdout: signals, stderr: "" }), "/repo"))
+      .toEqual({ kind: "unavailable" });
   });
 });

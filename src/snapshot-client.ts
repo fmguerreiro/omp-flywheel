@@ -1,4 +1,4 @@
-import { MAX_SNAPSHOT_BYTES, parseCandidates, parseOpenSignals, parseSnapshot, type FlywheelCandidatesV1, type FlywheelOpenSignalsV1, type FlywheelSnapshotV1 } from "./protocol";
+import { MAX_DETAILS_BYTES, MAX_SNAPSHOT_BYTES, parseCandidates, parseOpenSignals, parseSnapshot, type FlywheelCandidatesV1, type FlywheelOpenSignalsV1, type FlywheelSnapshotV1 } from "./protocol";
 
 export interface SnapshotRunResult {
   code: number;
@@ -51,7 +51,7 @@ export async function loadOpenSignals(run: SnapshotRun, cwd: string): Promise<Op
       cwd,
       timeout: SNAPSHOT_TIMEOUT_MS,
     });
-    if (result.code !== 0 || new TextEncoder().encode(result.stdout).byteLength > MAX_SNAPSHOT_BYTES) {
+    if (result.code !== 0 || new TextEncoder().encode(result.stdout).byteLength > MAX_DETAILS_BYTES) {
       return { kind: "unavailable" };
     }
     return { kind: "ready", signals: parseOpenSignals(result.stdout) };
@@ -67,7 +67,7 @@ export async function loadCandidates(run: SnapshotRun, cwd: string): Promise<Can
       cwd,
       timeout: SNAPSHOT_TIMEOUT_MS,
     });
-    if (result.code !== 0 || new TextEncoder().encode(result.stdout).byteLength > MAX_SNAPSHOT_BYTES) {
+    if (result.code !== 0 || new TextEncoder().encode(result.stdout).byteLength > MAX_DETAILS_BYTES) {
       return { kind: "unavailable" };
     }
     return { kind: "ready", candidates: parseCandidates(result.stdout) };

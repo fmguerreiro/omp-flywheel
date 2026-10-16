@@ -1,4 +1,5 @@
 export const MAX_SNAPSHOT_BYTES = 64 * 1024;
+export const MAX_DETAILS_BYTES = 1024 * 1024;
 
 export type CaseStatus = "candidate" | "active";
 export type DraftStatus = "running" | "failed" | "blocked" | "needs_revision" | "fixed";
@@ -93,8 +94,8 @@ function invalid(message: string): never {
   throw new TypeError(`Invalid Flywheel snapshot: ${message}`);
 }
 
-function parseOneLine(text: string): unknown {
-  if (new TextEncoder().encode(text).byteLength > MAX_SNAPSHOT_BYTES) {
+function parseOneLine(text: string, maxBytes = MAX_SNAPSHOT_BYTES): unknown {
+  if (new TextEncoder().encode(text).byteLength > maxBytes) {
     invalid("output exceeds size limit");
   }
 
@@ -248,7 +249,7 @@ function parseRecentCases(value: unknown): FlywheelRecentCase[] {
 }
 
 export function parseOpenSignals(text: string): FlywheelOpenSignalsV1 {
-  const source = record(parseOneLine(text), "open signals");
+  const source = record(parseOneLine(text, MAX_DETAILS_BYTES), "open signals");
   exactKeys(source, "open signals", ["schema_version", "signals"]);
   if (source.schema_version !== 1) {
     invalid("unsupported open-signal schema version");
@@ -304,7 +305,7 @@ export function parseTriagePromotion(text: string, signalId: number): string {
 }
 
 export function parseCandidates(text: string): FlywheelCandidatesV1 {
-  const source = record(parseOneLine(text), "candidates");
+  const source = record(parseOneLine(text, MAX_DETAILS_BYTES), "candidates");
   exactKeys(source, "candidates", ["schema_version", "candidates"]);
   if (source.schema_version !== 1) invalid("unsupported schema version");
   if (!Array.isArray(source.candidates)) invalid("candidates must be an array");
