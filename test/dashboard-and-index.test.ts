@@ -90,6 +90,7 @@ type ExecResult = { code: number; stdout: string; stderr: string };
 function candidateDashboard(options: {
   candidates?: readonly CandidateFixture[];
   corrections?: boolean;
+  signalsJson?: string;
   authorizeDraft?: boolean;
   analyze?: (args: string[], options: { cwd: string; timeout: number }) => Promise<ExecResult>;
   promote?: (args: string[], options: { cwd: string; timeout: number }) => Promise<ExecResult>;
@@ -137,7 +138,7 @@ function candidateDashboard(options: {
         returnedCandidates = snapshotRequests;
         return { code: 0, stdout: candidatesJson(candidates), stderr: "" };
       }
-      if (args.includes("signals")) return { code: 0, stdout: openSignals, stderr: "" };
+      if (args.includes("signals")) return { code: 0, stdout: options.signalsJson ?? openSignals, stderr: "" };
       if (args.includes("triage-propose")) {
         return options.analyze?.(args, execOptions) ?? { code: 0, stdout: JSON.stringify(triageProposal), stderr: "" };
       }
@@ -267,6 +268,67 @@ describe("flywheel dashboard extension", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  test("removes terminal controls from correction evidence and proposal confirmation", async () => {
+    const controls = "\u001b[2J\u001b]52;c;cG9pc29u\u0007\u0008";
+    const dashboard = candidateDashboard({
+      corrections: true,
+      signalsJson: JSON.stringify({
+        schema_version: 1,
+        signals: [{
+          id: 7,
+          kind: `corrected${controls}`,
+          component: `verification${controls}`,
+          reason: `Exercise${controls} the changed path.`,
+          assistant_text: `## Verified${controls} behavior\n\`\`\`diff\n+++ b/src/client.ts${controls}\n-old\n+new\n\`\`\``,
+          created_at: "2026-10-14T12:00:00Z",
+        }],
+      }),
+      analyze: async () => ({
+        code: 0,
+        stdout: JSON.stringify({ ...triageProposal, diagnosis: `Verify${controls} the changed path.` }),
+        stderr: "",
+      }),
+    });
+    await dashboard.start();
+    const rendered = dashboard.render().join("\n");
+    expect(rendered).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/);
+    expect(rendered).toContain("Verified behavior");
+    expect(rendered).toContain("Exercise the changed path.");
+    expect(rendered).toContain("src/client.ts");
+    expect(rendered).toContain("+new");
+    dashboard.press("p");
+    await dashboard.waitForOverlay(2);
+    expect(dashboard.confirmations[0]?.message).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/);
+    expect(dashboard.confirmations[0]?.message).toContain("Verify the changed path.");
+    expect(dashboard.confirmations[0]?.message).toContain("automatically commits and pushes to origin/main");
+    await dashboard.close();
+  });
+
+  test("removes terminal controls from candidate cards, confirmations, and failures", async () => {
+    const controls = "\u001b[2J\u001b]52;c;cG9pc29u\u0007\u0008";
+    const dashboard = candidateDashboard({
+      candidates: [{
+        ...candidateCases[0]!,
+        component: `verification${controls}`,
+        diagnosis: `Exercise${controls} the changed path.`,
+        latest_draft: { status: "failed", error: `Verifier${controls} failed.` },
+      }],
+      authorizeDraft: true,
+      draft: async () => ({ code: 1, stdout: "", stderr: `Evaluation${controls} failed.` }),
+    });
+    await dashboard.start();
+    const rendered = dashboard.render().join("\n");
+    expect(rendered).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/);
+    expect(rendered).toContain("Exercise the changed path.");
+    expect(rendered).toContain("Verifier failed.");
+    dashboard.press("d");
+    await dashboard.waitForOverlay(2);
+    expect(dashboard.confirmations[0]?.message).toContain("Exercise the changed path.");
+    expect(dashboard.confirmations[0]?.message).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/);
+    expect(dashboard.notices.at(-1)).toEqual({ message: "Evaluation failed.", type: "error" });
+    await dashboard.close();
   });
 
   test("refreshes an overlay and completes after close", async () => {

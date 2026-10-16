@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import { startDraftProgress } from "./draft-progress";
 import { dashboardLines, widgetLines } from "./present";
 import { loadCandidates, loadOpenSignals, loadSnapshot, type SnapshotRun } from "./snapshot-client";
@@ -133,13 +134,18 @@ function bold(theme: DashboardTheme, text: string): string {
   return theme.bold?.(text) ?? text;
 }
 
+function terminalText(text: string): string {
+  return stripVTControlCharacters(text).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
+}
+
 function clip(text: string, width: number): string {
-  return text.length <= width ? text : `${text.slice(0, Math.max(width - 1, 0))}…`;
+  const source = terminalText(text).replaceAll(/[\n\t]/g, " ");
+  return source.length <= width ? source : `${source.slice(0, Math.max(width - 1, 0))}…`;
 }
 
 function wrappedText(text: string, width: number): string[] {
   const limit = Math.max(width, 1);
-  const normalized = text.trim();
+  const normalized = terminalText(text).trim();
   if (!normalized) return [""];
 
   const lines: string[] = [];
@@ -228,7 +234,7 @@ function markdownLineColor(text: string, inCode: boolean, isDiff: boolean): Dash
 
 function modifiedFiles(text: string): string[] {
   const files = new Set<string>();
-  for (const line of text.replaceAll("\r", "").split("\n")) {
+  for (const line of terminalText(text).split("\n")) {
     const patchFile = /^(?:\+\+\+ b\/|\*\*\* (?:Update|Add|Delete) File:\s*)(.+)$/.exec(line)?.[1];
     const diffFile = /^diff --git a\/(.+) b\/(.+)$/.exec(line)?.[2];
     const file = patchFile ?? diffFile;
@@ -238,7 +244,7 @@ function modifiedFiles(text: string): string[] {
 }
 
 function markdownExcerpt(text: string, width: number): Array<{ text: string; color: DashboardThemeColor; strong?: boolean }> {
-  const source = text.slice(0, 2_400).replaceAll("\r", "");
+  const source = terminalText(text).slice(0, 2_400);
   if (!source.trim()) return [{ text: "No prior agent response captured.", color: "muted" }];
 
   const lines: Array<{ text: string; color: DashboardThemeColor; strong?: boolean }> = [];
@@ -435,7 +441,7 @@ export default function flywheelDashboard(pi: DashboardExtensionApi): void {
       const proposal = parseTriageProposal(analysis.stdout, signal.id);
       if (!await ctx.ui.confirm(
         "Review suggested improvement",
-        `Your correction: ${signal.reason ?? signal.kind}\n\nSuggested behavior change:\n${proposal.diagnosis}\n\nSeverity: ${proposal.severity}\n\nFlywheel will choose the instruction file, write a change in an isolated checkout, and run evaluation checks.\n\nIf checks pass, it automatically commits and pushes to origin/main. There is no second approval.\n\nStart drafting?`,
+        terminalText(`Your correction: ${signal.reason ?? signal.kind}\n\nSuggested behavior change:\n${proposal.diagnosis}\n\nSeverity: ${proposal.severity}\n\nFlywheel will choose the instruction file, write a change in an isolated checkout, and run evaluation checks.\n\nIf checks pass, it automatically commits and pushes to origin/main. There is no second approval.\n\nStart drafting?`),
       )) return;
       const result = await pi.exec(
         process.env.AGENT_FLYWHEEL_CLI ?? "agent-flywheel",
@@ -448,7 +454,7 @@ export default function flywheelDashboard(pi: DashboardExtensionApi): void {
       const caseId = parseTriagePromotion(result.stdout, signal.id);
       await executeDraft(ctx, caseId);
     } catch (error) {
-      ctx.ui.notify(error instanceof Error ? error.message : "Could not analyze this correction.", "error");
+      ctx.ui.notify(terminalText(error instanceof Error ? error.message : "Could not analyze this correction."), "error");
       await refresh(ctx);
     } finally {
       busy = false;
@@ -465,7 +471,7 @@ export default function flywheelDashboard(pi: DashboardExtensionApi): void {
     try {
       if (!await ctx.ui.confirm(
         "Draft selected improvement?",
-        `${candidate.diagnosis ?? "No description captured."}\n\nFlywheel will choose the instruction file, write a change in an isolated checkout, and run evaluation checks.\n\nIf checks pass, it automatically commits and pushes to origin/main. There is no second approval.\n\nStart drafting?`,
+        terminalText(`${candidate.diagnosis ?? "No description captured."}\n\nFlywheel will choose the instruction file, write a change in an isolated checkout, and run evaluation checks.\n\nIf checks pass, it automatically commits and pushes to origin/main. There is no second approval.\n\nStart drafting?`),
       )) return;
       await executeDraft(ctx, candidate.id);
     } finally {
@@ -483,14 +489,14 @@ export default function flywheelDashboard(pi: DashboardExtensionApi): void {
         ["draft", "--case", caseId, "--repo", ctx.cwd, "--progress-file", progress.path],
         { cwd: ctx.cwd, timeout: 900_000 },
       );
-      ctx.ui.notify(result.code === 0 ? result.stdout.trim() || "Draft attempt finished." : result.stderr.trim() || result.stdout.trim() || "Draft failed.", result.code === 0 ? "info" : "error");
+      ctx.ui.notify(terminalText(result.code === 0 ? result.stdout.trim() || "Draft attempt finished." : result.stderr.trim() || result.stdout.trim() || "Draft failed."), result.code === 0 ? "info" : "error");
     } catch (error) {
-      ctx.ui.notify(error instanceof Error ? error.message : "Could not draft improvement.", "error");
+      ctx.ui.notify(terminalText(error instanceof Error ? error.message : "Could not draft improvement."), "error");
     } finally {
       try {
         await progress?.close();
       } catch (error) {
-        ctx.ui.notify(error instanceof Error ? error.message : "Could not remove draft progress files.", "warning");
+        ctx.ui.notify(terminalText(error instanceof Error ? error.message : "Could not remove draft progress files."), "warning");
       } finally {
         await refresh(ctx);
         const drafted = candidates?.findIndex((candidate) => candidate.id === caseId) ?? -1;
