@@ -4,15 +4,23 @@ Interactive Agent Flywheel triage and candidate-draft dashboard for OMP.
 
 ## Install
 
-Install this package as an OMP plugin. Its `package.json` exposes the extension through the `omp.extensions` manifest field:
+Requires [Oh My Pi](https://github.com/can1357/oh-my-pi), [uv](https://docs.astral.sh/uv/), Python 3.11+, and Git. Verified with OMP 18.11.1.
 
-```json
-{
-  "omp": {
-    "extensions": ["./src/index.ts"]
-  }
-}
+```sh
+uv tool install git+https://github.com/fmguerreiro/agent-flywheel.git
+omp plugin install github:fmguerreiro/omp-flywheel
 ```
+
+Configure the [Agent Flywheel backend](https://github.com/fmguerreiro/agent-flywheel#configuration) for your instruction repository, staged instruction paths, transcript sources, and sandbox before drafting. Its default configuration file is `~/.local/share/agent-flywheel/flywheel.toml`; `AGENT_FLYWHEEL_HOME` overrides that directory. Without configuration, the backend assumes a dotfiles host at `~/projects/dotfiles`.
+
+Populate its local store, then check that the dashboard can read it:
+
+```sh
+agent-flywheel ingest --since 7d --derive-signals
+agent-flywheel snapshot --json
+```
+
+Restart OMP and run `/flywheel`. The dashboard reads the backend's local store; it does not ingest transcripts or start background automation.
 
 Set `AGENT_FLYWHEEL_CLI` when the snapshot executable is not named `agent-flywheel`:
 
@@ -31,6 +39,8 @@ When both corrections and candidates exist, press Tab to switch views. In Correc
 Press `r` to refresh or Escape to close. The dashboard renders inline directly below the Flywheel status, replacing the editor while open rather than floating at the bottom of the terminal. Closing restores the editor and any unsent text, with the status widget back below it. The dashboard closes before dialogs, then returns after completion or cancellation. Both legacy and Kitty keyboard protocol input are supported. At main-session start, the extension reads a bounded snapshot, open correction details, and candidate descriptions. Theme-coloured cards preserve Markdown and diff structure in prior responses. The status widget appears only for durable work needing attention.
 
 A draft marked `fixed` has already been published and needs no review. Successful drafts and passing evaluations do not keep the status widget visible. Active cases count existing evaluation coverage, not improvements awaiting review.
+
+Stored evidence, candidate descriptions, and command errors have terminal escape sequences and control characters removed before display; Markdown line breaks remain. Correction and candidate JSON pages accept up to 1 MiB, including escaped Unicode text; summary snapshots retain the 64 KiB limit.
 
 ## Screenshots
 
