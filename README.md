@@ -31,3 +31,22 @@ When both corrections and candidates exist, press Tab to switch views. In Correc
 Press `r` to refresh or Escape to close. The dashboard renders inline directly below the Flywheel status, replacing the editor while open rather than floating at the bottom of the terminal. Closing restores the editor and any unsent text, with the status widget back below it. The dashboard closes before dialogs, then returns after completion or cancellation. Both legacy and Kitty keyboard protocol input are supported. At main-session start, the extension reads a bounded snapshot, open correction details, and candidate descriptions. Theme-coloured cards preserve Markdown and diff structure in prior responses. The status widget appears only for durable work needing attention.
 
 A draft marked `fixed` has already been published and needs no review. Successful drafts and passing evaluations do not keep the status widget visible. Active cases count existing evaluation coverage, not improvements awaiting review.
+
+## Screenshots
+
+Captured in OMP with sample feedback. Model analysis and evaluation progress are simulated; no instruction edits or publication.
+
+| Review correction evidence |
+| --- |
+| Inspect the reported correction alongside the prior response and its diff. |
+| ![Correction dashboard showing sample feedback and the prior response diff](images/corrections.png) |
+
+| Authorize the proposed change |
+| --- |
+| One confirmation starts drafting and evaluation, with automatic publication only if checks pass. |
+| ![Proposal confirmation explaining the suggested change and automatic publication](images/confirmation.png) |
+
+| Keep working during evaluation |
+| --- |
+| The editor remains usable while the status widget shows the current stage, activity, and elapsed time. |
+| ![Running evaluation progress below an editor containing unsent text](images/progress.png) |
