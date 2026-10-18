@@ -1,62 +1,65 @@
 # OMP Flywheel
 
-Interactive Agent Flywheel triage and candidate-draft dashboard for OMP.
+A dashboard for reviewing corrections and drafting instruction changes with [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi) and [Agent Flywheel](https://github.com/fmguerreiro/agent-flywheel).
 
-## Install
+## Install and configure
 
-Requires [Oh My Pi](https://github.com/can1357/oh-my-pi), [uv](https://docs.astral.sh/uv/), Python 3.11+, and Git. Verified with OMP 18.11.1.
+Requires OMP, [uv](https://docs.astral.sh/uv/), Python 3.11+, and Git. Verified with OMP 18.11.1.
 
 ```sh
 uv tool install git+https://github.com/fmguerreiro/agent-flywheel.git
 omp plugin install github:fmguerreiro/omp-flywheel
 ```
 
-Configure the [Agent Flywheel backend](https://github.com/fmguerreiro/agent-flywheel#configuration) for your instruction repository, staged instruction paths, transcript sources, and sandbox before drafting. Its default configuration file is `~/.local/share/agent-flywheel/flywheel.toml`; `AGENT_FLYWHEEL_HOME` overrides that directory. Without configuration, the backend assumes a dotfiles host at `~/projects/dotfiles`.
+[Configure the backend](https://github.com/fmguerreiro/agent-flywheel#configuration) with your instruction repository, staged instruction paths, transcript sources, and sandbox before drafting. Configuration defaults to `~/.local/share/agent-flywheel/flywheel.toml`; `AGENT_FLYWHEEL_HOME` overrides its directory. Without configuration, it assumes `~/projects/dotfiles`.
 
-Populate its local store, then check that the dashboard can read it:
+Populate and check the local store:
 
 ```sh
 agent-flywheel ingest --since 7d --derive-signals
 agent-flywheel snapshot --json
 ```
 
-Restart OMP and run `/flywheel`. The dashboard reads the backend's local store; it does not ingest transcripts or start background automation.
-
-Set `AGENT_FLYWHEEL_CLI` when the snapshot executable is not named `agent-flywheel`:
+The dashboard reads this store without ingesting transcripts or starting background automation. To override the executable:
 
 ```sh
 export AGENT_FLYWHEEL_CLI=/path/to/agent-flywheel
 ```
 
-## Dashboard
+## Use the dashboard
 
-Use `/flywheel` or `Ctrl+Shift+F` in the interactive TUI. With no open corrections, the dashboard opens directly on saved candidates. Each candidate shows its proposed behavior change, severity, latest draft status and error, and next step. Use `j`/`k` to select a candidate and `d` to draft that selection—no case ID entry. The confirmation explains that passing evaluations automatically commit and push to `origin/main`, with no second approval. A running draft cannot be started again; failed or blocked drafts can be retried. The view loads up to 20 candidates and shows loaded versus total counts when more exist.
+Restart OMP, then use `/flywheel` or `Ctrl+Shift+F`. Without open corrections, saved candidates appear first. The dashboard loads up to 20 candidates, showing loaded/total counts, proposed changes, severity, draft status/errors, and next steps.
 
-While a selected draft runs, the dashboard closes and the status widget shows the backend's current phase, latest model or tool activity, and elapsed time. There is no estimated percentage. This requires a Flywheel CLI supporting `draft --progress-file PATH`; the extension polls a bounded JSON progress file in a private temporary directory while the existing command runs, then stops polling and removes the directory before refreshing the dashboard. Drafts retain the 15-minute command timeout and report completion or failure through notifications.
+| Key | Action |
+| --- | --- |
+| `j` / `k` | Select a correction or candidate |
+| Tab | Switch between corrections and candidates when both exist |
+| `x` | Reject the selected correction |
+| `p` | Analyze the selected correction |
+| `d` | Draft the selected candidate; no case ID needed |
+| `r` | Refresh |
+| Escape | Close |
 
-When both corrections and candidates exist, press Tab to switch views. In Corrections, use `j`/`k` to select, `x` to reject, or `p` to analyze. Flywheel uses the current OMP model to generate a suggested behavior change, severity, and internal grouping label from the full stored evidence. Analysis alone changes no files or saved corrections. One confirmation of the proposal authorizes writing a change in an isolated checkout, evaluation, and automatic commit/push to `origin/main` only if checks pass. Saving the candidate happens internally; its exact ID comes from `triage-promote --json`, and drafting starts immediately without another confirmation or candidate action. Progress stays visible below the restored editor. A failed draft leaves the saved candidate selected for retry, which requires a new confirmation. This requires a Flywheel CLI supporting the versioned promotion response (`schema_version: 1`, `signal_id`, `case_id`). Without a selected session model, analysis inherits Flywheel's runner configuration; the built-in runner inherits OMP's configured default unless explicitly overridden.
+Closing restores the editor and unsent text. Dialogs temporarily close the dashboard. Legacy and Kitty keyboard input are supported.
 
-Press `r` to refresh or Escape to close. The dashboard renders inline directly below the Flywheel status, replacing the editor while open rather than floating at the bottom of the terminal. Closing restores the editor and any unsent text, with the status widget back below it. The dashboard closes before dialogs, then returns after completion or cancellation. Both legacy and Kitty keyboard protocol input are supported. At main-session start, the extension reads a bounded snapshot, open correction details, and candidate descriptions. Theme-coloured cards preserve Markdown and diff structure in prior responses. The status widget appears only for durable work needing attention.
+## Draft and publish
 
-A draft marked `fixed` has already been published and needs no review. Successful drafts and passing evaluations do not keep the status widget visible. Active cases count existing evaluation coverage, not improvements awaiting review.
+Analysis suggests behavior changes, severity, and grouping labels from full stored evidence without changing files or saved corrections. It uses your selected OMP model or Flywheel's runner settings (built-in default: OMP's configured model, unless overridden).
 
-Stored evidence, candidate descriptions, and command errors have terminal escape sequences and control characters removed before display; Markdown line breaks remain. Correction and candidate JSON pages accept up to 1 MiB, including escaped Unicode text; summary snapshots retain the 64 KiB limit.
+**One confirmation authorizes an isolated checkout, edits, evaluation, and automatic commit/push to `origin/main` if checks pass. There is no second approval.** Confirming a proposal saves a candidate and starts drafting immediately.
+
+Drafting restores the editor. Progress shows phase, model/tool activity, and elapsed time, not percentages. The CLI needs `draft --progress-file PATH` and `triage-promote --json` responses with `schema_version: 1`, `signal_id`, and `case_id`. Private temporary progress files are removed afterward. Drafts time out after 15 minutes and notify you of completion or failure.
+
+Running drafts cannot restart. Failed or blocked drafts can be retried with confirmation; failed proposal drafts leave their saved candidate selected. `fixed` means already published, not awaiting review.
+
+Stored evidence, candidate descriptions, and errors have terminal escapes/control characters removed; Markdown line breaks remain. Correction/candidate JSON pages allow 1 MiB, including escaped Unicode; snapshots allow 64 KiB.
 
 ## Screenshots
 
 Captured in OMP with sample feedback. Model analysis and evaluation progress are simulated; no instruction edits or publication.
 
-| Review correction evidence |
-| --- |
-| Inspect the reported correction alongside the prior response and its diff. |
-| ![Correction dashboard showing sample feedback and the prior response diff](images/corrections.png) |
+![Correction dashboard showing sample feedback and the prior response diff](images/corrections.png)
 
-| Authorize the proposed change |
-| --- |
-| One confirmation starts drafting and evaluation, with automatic publication only if checks pass. |
-| ![Proposal confirmation explaining the suggested change and automatic publication](images/confirmation.png) |
+![Proposal confirmation explaining the suggested change and automatic publication](images/confirmation.png)
 
-| Keep working during evaluation |
-| --- |
-| The editor remains usable while the status widget shows the current stage, activity, and elapsed time. |
-| ![Running evaluation progress below an editor containing unsent text](images/progress.png) |
+![Running evaluation progress below an editor containing unsent text](images/progress.png)
