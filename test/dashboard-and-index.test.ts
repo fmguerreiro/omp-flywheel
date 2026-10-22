@@ -489,6 +489,11 @@ describe("flywheel dashboard extension", () => {
     expect(confirmation?.message).toMatch(/automat\w*[\s\S]*push|push[\s\S]*automat/i);
     expect(confirmation?.message).toMatch(/no (?:second|additional|further) approval|without (?:a second|another|additional|further) approval/i);
     expect(confirmation?.message).toMatch(/if[\s\S]*(?:check|eval|test)[\s\S]*pass|pass(?:ing|ed)?[\s\S]*(?:check|eval|test)|fixed/i);
+    const drafts = dashboard.requests.filter((args) => args.includes("draft"));
+    expect(drafts).toHaveLength(authorizeDraft ? 1 : 0);
+    if (authorizeDraft) {
+      expect(drafts[0]).toEqual(["draft", "--case", candidateCases[1]!.id, "--progress-file", expect.any(String)]);
+    }
     expect(dashboard.requests.some((args) => args.some((arg) => arg.startsWith("triage-")))).toBe(false);
   });
 
