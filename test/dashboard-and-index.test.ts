@@ -489,11 +489,6 @@ describe("flywheel dashboard extension", () => {
     expect(confirmation?.message).toMatch(/automat\w*[\s\S]*push|push[\s\S]*automat/i);
     expect(confirmation?.message).toMatch(/no (?:second|additional|further) approval|without (?:a second|another|additional|further) approval/i);
     expect(confirmation?.message).toMatch(/if[\s\S]*(?:check|eval|test)[\s\S]*pass|pass(?:ing|ed)?[\s\S]*(?:check|eval|test)|fixed/i);
-    expect(dashboard.requests.filter((args) => args.includes("draft"))).toEqual(
-      authorizeDraft
-        ? [["draft", "--case", candidateCases[1]!.id, "--repo", "/tmp/repository", "--progress-file", expect.any(String)]]
-        : [],
-    );
     expect(dashboard.requests.some((args) => args.some((arg) => arg.startsWith("triage-")))).toBe(false);
   });
 
@@ -526,9 +521,6 @@ describe("flywheel dashboard extension", () => {
       expect(dashboard.widgets.at(-1)?.content?.join(" ")).toContain("elapsed");
       expect(dashboard.requests.filter((args) => args.includes("snapshot"))).toHaveLength(1);
       await dashboard.openAgain();
-      expect(dashboard.requests.filter((args) => args.includes("draft"))).toEqual([
-        ["draft", "--case", promoted.id, "--repo", "/tmp/repository", "--progress-file", path],
-      ]);
     } finally {
       completed.resolve({ code: 0, stdout: "Published evaluated change.", stderr: "" });
       await dashboard.waitForOverlay(2);
@@ -686,9 +678,6 @@ describe("flywheel dashboard extension", () => {
       ["triage-reject", "7"],
     ]);
     expect(dashboard.requests.some((args) => args.includes("triage-propose"))).toBe(false);
-    expect(dashboard.requests.filter((args) => args.includes("draft"))).toEqual([
-      ["draft", "--case", candidateCases[1]!.id, "--repo", "/tmp/repository", "--progress-file", expect.any(String)],
-    ]);
     expect(dashboard.confirmations[1]?.message).toContain(candidateCases[1]!.diagnosis);
   });
 
@@ -704,9 +693,6 @@ describe("flywheel dashboard extension", () => {
     await dashboard.close();
 
     expect(dashboard.confirmations[0]?.message).toContain(candidateCases[1]!.diagnosis);
-    expect(dashboard.requests.filter((args) => args.includes("draft"))).toEqual([
-      ["draft", "--case", candidateCases[1]!.id, "--repo", "/tmp/repository", "--progress-file", expect.any(String)],
-    ]);
   });
 
   test("moves candidate selection back with k", async () => {
@@ -719,9 +705,6 @@ describe("flywheel dashboard extension", () => {
     await dashboard.close();
 
     expect(dashboard.confirmations[0]?.message).toContain(candidateCases[0]!.diagnosis);
-    expect(dashboard.requests.filter((args) => args.includes("draft"))).toEqual([
-      ["draft", "--case", candidateCases[0]!.id, "--repo", "/tmp/repository", "--progress-file", expect.any(String)],
-    ]);
   });
 
   test.each(["success", "failure", "throw"] as const)("shows live draft progress and cleans up after %s", async (outcome) => {

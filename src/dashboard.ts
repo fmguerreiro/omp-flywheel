@@ -486,7 +486,7 @@ export default function flywheelDashboard(pi: DashboardExtensionApi): void {
       progress = await startDraftProgress((lines) => setWidget(ctx, lines));
       const result = await pi.exec(
         process.env.AGENT_FLYWHEEL_CLI ?? "agent-flywheel",
-        ["draft", "--case", caseId, "--repo", ctx.cwd, "--progress-file", progress.path],
+        ["draft", "--case", caseId, "--progress-file", progress.path],
         { cwd: ctx.cwd, timeout: 900_000 },
       );
       ctx.ui.notify(terminalText(result.code === 0 ? result.stdout.trim() || "Draft attempt finished." : result.stderr.trim() || result.stdout.trim() || "Draft failed."), result.code === 0 ? "info" : "error");
